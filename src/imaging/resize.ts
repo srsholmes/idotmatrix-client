@@ -22,6 +22,17 @@ export async function resizeImageToPng(inputPath: string, size: DisplaySize): Pr
 		.toBuffer();
 }
 
+export async function resizeBufferToGif(input: Buffer | Uint8Array, size: DisplaySize): Promise<Buffer> {
+	return sharp(input)
+		.resize(size, size, {
+			fit: "contain",
+			kernel: "nearest",
+			background: { r: 0, g: 0, b: 0 },
+		})
+		.gif()
+		.toBuffer();
+}
+
 export async function resizeBufferToPng(input: Buffer | Uint8Array, size: DisplaySize): Promise<Buffer> {
 	return sharp(input)
 		.resize(size, size, {

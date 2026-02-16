@@ -1,10 +1,39 @@
 import type { Command } from "commander";
 import { NobleTransport } from "../../transport/noble-transport.ts";
 import { createGifPayloads } from "../../protocol/commands/gif.ts";
-import { resizeGif } from "../../imaging/gif.ts";
+import { resizeGif, resizeGifBuffer } from "../../imaging/gif.ts";
 import { log, error } from "../../utils/logger.ts";
 import type { DisplaySize } from "../../protocol/types.ts";
 import { readFile, writeFile } from "node:fs/promises";
+
+function isUrl(input: string): boolean {
+	return input.startsWith("http://") || input.startsWith("https://");
+}
+
+async function fetchData(url: string): Promise<Buffer> {
+	log(`Downloading from ${url}...`);
+	const response = await fetch(url);
+	if (!response.ok) {
+		throw new Error(`Failed to download: ${response.status} ${response.statusText}`);
+	}
+	return Buffer.from(await response.arrayBuffer());
+}
+
+async function loadAndResizeGif(input: string, size: DisplaySize, raw: boolean): Promise<Buffer> {
+	if (raw) {
+		if (isUrl(input)) {
+			return fetchData(input);
+		}
+		return readFile(input);
+	}
+
+	log(`Resizing GIF to ${size}x${size}...`);
+	if (isUrl(input)) {
+		const buffer = await fetchData(input);
+		return resizeGifBuffer(buffer, size);
+	}
+	return resizeGif(input, size);
+}
 
 export function registerGifCommand(program: Command): void {
 	const cmd = program.command("gif").description("Upload animated GIFs to the display");
@@ -12,23 +41,17 @@ export function registerGifCommand(program: Command): void {
 	cmd
 		.command("upload")
 		.description("Upload an animated GIF to the display")
-		.argument("<path>", "Path to the GIF file")
+		.argument("<source>", "Path to GIF file or URL (http/https)")
 		.option("-s, --size <size>", "Display size (32 or 64)", "32")
 		.option("--raw", "Skip resize, send GIF as-is")
-		.action(async (filePath: string, opts) => {
+		.action(async (source: string, opts) => {
 			const size = Number.parseInt(opts.size, 10) as DisplaySize;
 			if (size !== 32 && size !== 64) {
 				error("Size must be 32 or 64.");
 				process.exit(1);
 			}
 
-			let gifData: Buffer;
-			if (opts.raw) {
-				gifData = await readFile(filePath);
-			} else {
-				log(`Resizing GIF to ${size}x${size}...`);
-				gifData = await resizeGif(filePath, size);
-			}
+			const gifData = await loadAndResizeGif(source, size, opts.raw);
 
 			const payloads = createGifPayloads(gifData);
 			log(`GIF payload: ${payloads.length} chunk(s)`);
@@ -49,17 +72,17 @@ export function registerGifCommand(program: Command): void {
 	cmd
 		.command("preview")
 		.description("Preview resized GIF without uploading")
-		.argument("<path>", "Path to the GIF file")
+		.argument("<source>", "Path to GIF file or URL (http/https)")
 		.option("-s, --size <size>", "Display size (32 or 64)", "32")
 		.option("-o, --output <path>", "Output file path", "preview.gif")
-		.action(async (filePath: string, opts) => {
+		.action(async (source: string, opts) => {
 			const size = Number.parseInt(opts.size, 10) as DisplaySize;
 			if (size !== 32 && size !== 64) {
 				error("Size must be 32 or 64.");
 				process.exit(1);
 			}
 
-			const gifData = await resizeGif(filePath, size);
+			const gifData = await loadAndResizeGif(source, size, false);
 			await writeFile(opts.output, gifData);
 			log(`Preview saved to ${opts.output} (${size}x${size})`);
 		});
