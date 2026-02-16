@@ -152,14 +152,14 @@ impl BtleplugTransport {
             WriteType::WithoutResponse
         };
 
-        // btleplug handles MTU chunking internally on most platforms,
-        // but we still chunk large payloads for reliability
-        let mtu = 200; // btleplug typically negotiates a reasonable MTU
-        let max_write_size = mtu.max(20);
+        // Split large payloads into MTU-sized BLE writes.
+        // macOS CoreBluetooth typically negotiates 512-byte MTU.
+        // The device reassembles chunks using the length field in the protocol header.
+        let max_write_size = 509; // MTU(512) - 3 ATT overhead
 
         if data.len() <= max_write_size {
             debug!(
-                "Writing {} bytes (single write, with_response={})",
+                "Writing {} bytes (with_response={})",
                 data.len(),
                 with_response
             );
@@ -169,24 +169,17 @@ impl BtleplugTransport {
         } else {
             let total_chunks = (data.len() + max_write_size - 1) / max_write_size;
             debug!(
-                "Writing {} bytes in {} chunks of {} (with_response={})",
+                "Writing {} bytes in {} BLE chunks (with_response={})",
                 data.len(),
                 total_chunks,
-                max_write_size,
                 with_response
             );
-            for (i, chunk) in data.chunks(max_write_size).enumerate() {
-                debug!(
-                    "  Chunk {}/{}: {} bytes",
-                    i + 1,
-                    total_chunks,
-                    chunk.len()
-                );
+            for chunk in data.chunks(max_write_size) {
                 peripheral
                     .write(write_char, chunk, write_type)
                     .await?;
-                let delay = if with_response { BLE_DELAY_MS } else { 50 };
-                sleep(Duration::from_millis(delay)).await;
+                let delay_ms = if with_response { BLE_DELAY_MS } else { 50 };
+                sleep(Duration::from_millis(delay_ms)).await;
             }
         }
 

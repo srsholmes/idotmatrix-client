@@ -98,6 +98,60 @@ pub enum Commands {
         #[command(subcommand)]
         action: CarouselAction,
     },
+
+    /// Display visual effect
+    Effect {
+        /// Effect style (0-6): 0=horizontal rainbow, 1=random pixels, 2=random white, 3=vertical rainbow, 4=diagonal right, 5=diagonal left, 6=random colored
+        #[arg(long, default_value_t = 0)]
+        style: u8,
+        /// Colors as hex values (2-7 colors, e.g. ff0000 00ff00)
+        colors: Vec<String>,
+    },
+
+    /// Set animation/display speed
+    Speed {
+        /// Speed value
+        value: u8,
+    },
+
+    /// Set device password
+    Password {
+        /// Password (0-999999)
+        value: u32,
+    },
+
+    /// Toggle time indicator on clock
+    TimeIndicator {
+        /// Enable or disable (on/off)
+        state: String,
+    },
+
+    /// Display scrolling text
+    Text {
+        /// Text to display
+        message: String,
+        /// Text mode (0-8): 0=replace, 1=marquee, 2=reversed, 3=rise, 4=lower, 5=blink, 6=fade, 7=tetris, 8=fill
+        #[arg(long, default_value_t = 1)]
+        mode: u8,
+        /// Scroll speed (0-255)
+        #[arg(long, default_value_t = 95)]
+        speed: u8,
+        /// Text color mode (0-5): 0=white, 1=custom, 2-5=rainbow modes
+        #[arg(long, default_value_t = 1)]
+        color_mode: u8,
+        /// Text color hex (e.g. ff0000)
+        #[arg(long, default_value = "ff0000")]
+        color: String,
+        /// Background mode (0=black, 1=custom)
+        #[arg(long, default_value_t = 0)]
+        bg_mode: u8,
+        /// Background color hex (e.g. 000000)
+        #[arg(long, default_value = "000000")]
+        bg_color: String,
+        /// Font size in pixels
+        #[arg(long, default_value_t = 24)]
+        font_size: u32,
+    },
 }
 
 #[derive(Subcommand)]

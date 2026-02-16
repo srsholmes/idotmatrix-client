@@ -14,8 +14,8 @@ use cli::{
 };
 use imaging::{fetch_image, is_url};
 use protocol::commands::{
-    chronograph, clock, common, countdown, fullscreen_color, gif, graffiti, image,
-    scoreboard,
+    chronograph, clock, common, countdown, effect, fullscreen_color, gif, graffiti,
+    scoreboard, text,
 };
 use protocol::types::Color;
 use transport::ble::BtleplugTransport;
@@ -134,6 +134,74 @@ async fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             Ok(())
         }
         Commands::Carousel { action } => cmd_carousel(&cli.address, action).await,
+        Commands::Effect { style, colors } => {
+            let parsed_colors: Vec<Color> = colors.iter().map(|h| Color::from_hex(h)).collect();
+            let mut t = connect(&cli.address).await?;
+            t.write(&effect::set_effect(style, &parsed_colors), false)
+                .await?;
+            println!("Effect set (style={})", style);
+            t.disconnect().await?;
+            Ok(())
+        }
+        Commands::Speed { value } => {
+            let mut t = connect(&cli.address).await?;
+            t.write(&common::set_speed(value), false).await?;
+            println!("Speed set to {}", value);
+            t.disconnect().await?;
+            Ok(())
+        }
+        Commands::Password { value } => {
+            let mut t = connect(&cli.address).await?;
+            t.write(&common::set_password(value), false).await?;
+            println!("Password set");
+            t.disconnect().await?;
+            Ok(())
+        }
+        Commands::TimeIndicator { state } => {
+            let enabled = match state.as_str() {
+                "on" | "true" | "1" => true,
+                "off" | "false" | "0" => false,
+                _ => return Err("Invalid state. Use: on, off".into()),
+            };
+            let mut t = connect(&cli.address).await?;
+            t.write(&clock::set_time_indicator(enabled), false).await?;
+            println!("Time indicator {}", if enabled { "on" } else { "off" });
+            t.disconnect().await?;
+            Ok(())
+        }
+        Commands::Text {
+            message,
+            mode,
+            speed,
+            color_mode,
+            color,
+            bg_mode,
+            bg_color,
+            font_size,
+        } => {
+            let text_color = Color::from_hex(&color);
+            let text_bg_color = Color::from_hex(&bg_color);
+
+            println!("Rendering text: \"{}\"", message);
+            let bitmaps = text::render_text(&message, font_size)?;
+
+            let opts = text::TextOptions {
+                bitmaps,
+                text_mode: mode,
+                speed,
+                text_color_mode: color_mode,
+                text_color,
+                text_bg_mode: bg_mode,
+                text_bg_color,
+            };
+            let packet = text::build_text_packet(&opts);
+
+            let mut t = connect(&cli.address).await?;
+            t.write(&packet, true).await?;
+            println!("Text sent.");
+            t.disconnect().await?;
+            Ok(())
+        }
     }
 }
 
@@ -239,7 +307,7 @@ async fn cmd_image(
                 imaging::resize::resize_image_to_gif(&data, size as u32)?
             };
 
-            let payloads = image::create_image_payloads(&gif_data);
+            let payloads = gif::create_gif_payloads(&gif_data);
             println!(
                 "Uploading image ({} bytes, {} chunks)...",
                 gif_data.len(),
@@ -250,9 +318,7 @@ async fn cmd_image(
             for (i, payload) in payloads.iter().enumerate() {
                 info!("Sending chunk {}/{}", i + 1, payloads.len());
                 t.write(payload, true).await?;
-                if i < payloads.len() - 1 {
-                    sleep(Duration::from_millis(1000)).await;
-                }
+                sleep(Duration::from_millis(1000)).await;
             }
             println!("Image uploaded.");
             t.disconnect().await?;
@@ -296,9 +362,7 @@ async fn cmd_gif(
             for (i, payload) in payloads.iter().enumerate() {
                 info!("Sending chunk {}/{}", i + 1, payloads.len());
                 t.write(payload, true).await?;
-                if i < payloads.len() - 1 {
-                    sleep(Duration::from_millis(1000)).await;
-                }
+                sleep(Duration::from_millis(1000)).await;
             }
             println!("GIF uploaded.");
             t.disconnect().await?;
@@ -354,9 +418,7 @@ async fn cmd_carousel(
             for (i, payload) in payloads.iter().enumerate() {
                 info!("Sending chunk {}/{}", i + 1, payloads.len());
                 t.write(payload, true).await?;
-                if i < payloads.len() - 1 {
-                    sleep(Duration::from_millis(1000)).await;
-                }
+                sleep(Duration::from_millis(1000)).await;
             }
             println!("Carousel uploaded.");
             t.disconnect().await?;

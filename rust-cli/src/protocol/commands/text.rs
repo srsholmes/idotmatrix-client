@@ -1,8 +1,13 @@
+use ab_glyph::{FontRef, PxScale, Font, ScaleFont};
 use crate::protocol::types::Color;
 
 const TEXT_SEPARATOR: [u8; 4] = [0x05, 0xFF, 0xFF, 0xFF];
 const IMAGE_WIDTH: usize = 16;
 const IMAGE_HEIGHT: usize = 32;
+
+// Embedded font - DejaVu Sans Mono subset would be ideal, but we'll use the
+// built-in font data. Users can also provide a custom font path.
+const EMBEDDED_FONT: &[u8] = include_bytes!("../../../fonts/Rain-DRM3.otf");
 
 pub struct TextOptions {
     pub bitmaps: Vec<u8>,
@@ -26,6 +31,46 @@ impl Default for TextOptions {
             text_bg_color: Color::new(0, 0, 0),
         }
     }
+}
+
+/// Render a text string to bitmap data suitable for TextOptions.bitmaps.
+/// Each character is rendered to a 16x32 monochrome bitmap, centered,
+/// and prefixed with the separator bytes.
+pub fn render_text(text: &str, font_size: u32) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+    let font = FontRef::try_from_slice(EMBEDDED_FONT)?;
+    let scale = PxScale::from(font_size as f32);
+    let scaled_font = font.as_scaled(scale);
+
+    let mut all_bitmaps = Vec::new();
+
+    for ch in text.chars() {
+        let mut canvas = vec![0u8; IMAGE_WIDTH * IMAGE_HEIGHT];
+
+        let glyph_id = font.glyph_id(ch);
+        if let Some(outlined) = scaled_font.outline_glyph(glyph_id.with_scale(scale)) {
+            let bounds = outlined.px_bounds();
+            let glyph_width = bounds.width() as i32;
+            let glyph_height = bounds.height() as i32;
+
+            // Center the glyph on the 16x32 canvas
+            let offset_x = (IMAGE_WIDTH as i32 - glyph_width) / 2 - bounds.min.x as i32;
+            let offset_y = (IMAGE_HEIGHT as i32 - glyph_height) / 2 - bounds.min.y as i32;
+
+            outlined.draw(|x, y, coverage| {
+                let px = x as i32 + offset_x + bounds.min.x as i32;
+                let py = y as i32 + offset_y + bounds.min.y as i32;
+                if px >= 0 && px < IMAGE_WIDTH as i32 && py >= 0 && py < IMAGE_HEIGHT as i32 {
+                    if coverage > 0.5 {
+                        canvas[py as usize * IMAGE_WIDTH + px as usize] = 1;
+                    }
+                }
+            });
+        }
+
+        all_bitmaps.extend(render_char_bitmap(&canvas));
+    }
+
+    Ok(all_bitmaps)
 }
 
 pub fn build_text_packet(opts: &TextOptions) -> Vec<u8> {
@@ -155,5 +200,23 @@ mod tests {
         // Metadata: num_chars = 1
         assert_eq!(result[16], 1);
         assert_eq!(result[17], 0);
+    }
+
+    #[test]
+    fn test_render_text_produces_bitmaps() {
+        let bitmaps = render_text("Hi", 24).unwrap();
+        // 2 characters: each is separator (4 bytes) + bitmap (64 bytes) = 68 bytes
+        assert_eq!(bitmaps.len(), 2 * 68);
+        // Check separators
+        assert_eq!(&bitmaps[0..4], &TEXT_SEPARATOR);
+        assert_eq!(&bitmaps[68..72], &TEXT_SEPARATOR);
+    }
+
+    #[test]
+    fn test_render_text_non_empty_glyphs() {
+        let bitmaps = render_text("A", 24).unwrap();
+        // The bitmap portion (after separator) should have some non-zero bytes
+        let bitmap_data = &bitmaps[4..68];
+        assert!(bitmap_data.iter().any(|&b| b != 0), "Glyph 'A' should have non-zero pixels");
     }
 }
