@@ -11,6 +11,7 @@ import { registerScoreboardCommand } from "./commands/scoreboard.ts";
 import { registerColorCommand } from "./commands/color.ts";
 import { registerPixelCommand } from "./commands/pixel.ts";
 import { registerResetCommand } from "./commands/reset.ts";
+import { registerCarouselCommand } from "./commands/carousel.ts";
 
 export function createProgram(): Command {
 	const program = new Command();
@@ -39,6 +40,7 @@ export function createProgram(): Command {
 	registerColorCommand(program);
 	registerPixelCommand(program);
 	registerResetCommand(program);
+	registerCarouselCommand(program);
 
 	return program;
 }
