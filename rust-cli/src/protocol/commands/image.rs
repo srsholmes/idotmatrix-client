@@ -1,11 +1,15 @@
+#[allow(dead_code)]
 use crate::protocol::constants::IMAGE_CHUNK_SIZE;
 
+#[allow(dead_code)]
 const HEADER_SIZE: usize = 16;
 
+#[allow(dead_code)]
 pub fn set_image_mode(mode: u8) -> Vec<u8> {
     vec![5, 0, 4, 1, mode]
 }
 
+#[allow(dead_code)]
 pub fn create_image_payloads(png_data: &[u8]) -> Vec<Vec<u8>> {
     let crc = crc32fast::hash(png_data);
     let chunks: Vec<&[u8]> = png_data.chunks(IMAGE_CHUNK_SIZE).collect();

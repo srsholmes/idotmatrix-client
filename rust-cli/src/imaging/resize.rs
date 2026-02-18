@@ -2,9 +2,7 @@ use color_quant::NeuQuant;
 use image::imageops::FilterType;
 use image::{AnimationDecoder, DynamicImage, GenericImageView, ImageFormat, Rgba, RgbaImage};
 use std::error::Error;
-use std::fs;
 use std::io::Cursor;
-use std::path::Path;
 
 /// Load an image from a file path or buffer, resize with "contain" fit
 /// (preserving aspect ratio, padding with black), and encode as GIF.
@@ -12,12 +10,6 @@ pub fn resize_image_to_gif(input: &[u8], size: u32) -> Result<Vec<u8>, Box<dyn E
     let img = image::load_from_memory(input)?;
     let resized = contain_resize(&img, size);
     encode_single_gif(&resized)
-}
-
-/// Load an image from a file path, resize, and encode as GIF.
-pub fn resize_image_file_to_gif(path: &Path, size: u32) -> Result<Vec<u8>, Box<dyn Error>> {
-    let data = fs::read(path)?;
-    resize_image_to_gif(&data, size)
 }
 
 /// Load an image from a file path, resize with "contain" fit, and encode as PNG.
@@ -46,12 +38,6 @@ pub fn resize_gif(input: &[u8], size: u32) -> Result<Vec<u8>, Box<dyn Error>> {
     }
 
     encode_animated_gif(&resized_frames, size)
-}
-
-/// Resize a GIF file, preserving animation.
-pub fn resize_gif_file(path: &Path, size: u32) -> Result<Vec<u8>, Box<dyn Error>> {
-    let data = fs::read(path)?;
-    resize_gif(&data, size)
 }
 
 /// Create an animated GIF from multiple images with a given delay between frames.

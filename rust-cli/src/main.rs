@@ -250,9 +250,17 @@ async fn cmd_screen(
             t.write(&common::screen_off(), false).await?;
             println!("Screen off");
         }
-        ScreenAction::Flip { no_flip } => {
-            t.write(&common::flip_screen(!no_flip), false).await?;
-            println!("Screen flip: {}", if no_flip { "off" } else { "on" });
+        ScreenAction::Flip { state } => {
+            let on = match state.to_lowercase().as_str() {
+                "on" => true,
+                "off" => false,
+                _ => {
+                    eprintln!("Invalid flip state '{}': use 'on' or 'off'", state);
+                    std::process::exit(1);
+                }
+            };
+            t.write(&common::flip_screen(on), false).await?;
+            println!("Screen flip: {}", if on { "on" } else { "off" });
         }
         ScreenAction::Brightness { percent } => {
             t.write(&common::set_brightness(percent), false).await?;

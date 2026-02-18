@@ -187,7 +187,4 @@ impl BtleplugTransport {
         Ok(())
     }
 
-    pub fn is_connected(&self) -> bool {
-        self.connected
-    }
 }

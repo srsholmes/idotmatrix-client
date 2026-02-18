@@ -160,11 +160,10 @@ pub enum ScreenAction {
     On,
     /// Turn display off
     Off,
-    /// Flip display 180 degrees
+    /// Flip display 180 degrees (on/off)
     Flip {
-        /// Disable flip (set upright)
-        #[arg(long)]
-        no_flip: bool,
+        /// on or off
+        state: String,
     },
     /// Set brightness (5-100%)
     Brightness {

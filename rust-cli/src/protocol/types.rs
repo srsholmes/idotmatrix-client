@@ -26,4 +26,3 @@ pub struct DiscoveredDevice {
     pub rssi: Option<i16>,
 }
 
-pub type DisplaySize = u8; // 32 or 64
