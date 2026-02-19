@@ -1,8 +1,10 @@
 mod cli;
 mod imaging;
+mod output;
 mod protocol;
 mod transport;
 
+use base64::Engine;
 use clap::Parser;
 use log::{error, info};
 use std::path::Path;
@@ -13,6 +15,7 @@ use cli::{
     CarouselAction, Cli, ClockAction, Commands, GifAction, ImageAction, ScreenAction,
 };
 use imaging::{fetch_image, is_url};
+use output::{print_error, print_json, print_progress, print_success, PreviewOutput, ScanOutput};
 use protocol::commands::{
     chronograph, clock, common, countdown, effect, fullscreen_color, gif, graffiti,
     scoreboard, text,
@@ -24,6 +27,8 @@ use transport::ble::BtleplugTransport;
 async fn main() {
     let cli = Cli::parse();
 
+    let json = cli.json;
+
     if cli.verbose {
         env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("debug")).init();
     } else {
@@ -31,36 +36,63 @@ async fn main() {
     }
 
     if let Err(e) = run(cli).await {
-        error!("{}", e);
-        eprintln!("Error: {}", e);
+        let msg = format!("{}", e);
+        eprintln!("[idm] fatal error: {}", msg);
+        if json {
+            // Ensure JSON error is always printed to stdout so the frontend can parse it
+            print_error(&msg);
+        }
         process::exit(1);
     }
 }
 
+/// Helper to print a message either as JSON or plain text
+fn msg(json: bool, message: &str) {
+    eprintln!("[idm] result: {}", message);
+    if json {
+        print_success(message);
+    } else {
+        println!("{}", message);
+    }
+}
+
+/// Helper to print an error either as JSON or plain text, then return Err
+fn err(json: bool, message: &str) -> Result<(), Box<dyn std::error::Error>> {
+    if json {
+        print_error(message);
+    } else {
+        eprintln!("Error: {}", message);
+    }
+    Err(message.into())
+}
+
 async fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
+    let json = cli.json;
+    eprintln!("[idm] json={}, address={:?}", json, cli.address);
+
     match cli.command {
-        Commands::Scan { timeout } => cmd_scan(timeout).await,
+        Commands::Scan { timeout } => cmd_scan(timeout, json).await,
         Commands::Screen { action } => {
-            let mut t = connect(&cli.address).await?;
-            let result = cmd_screen(&t, action).await;
-            t.disconnect().await?;
+            let mut t = connect(&cli.address, json).await?;
+            let result = cmd_screen(&t, action, json).await;
+            safe_disconnect(&mut t).await;
             result
         }
         Commands::Color { hex } => {
-            let mut t = connect(&cli.address).await?;
+            let mut t = connect(&cli.address, json).await?;
             let color = Color::from_hex(&hex);
             t.write(&fullscreen_color::set_fullscreen_color(color), false)
                 .await?;
-            println!("Color set to #{}", hex);
-            t.disconnect().await?;
+            msg(json, &format!("Color set to #{}", hex));
+            safe_disconnect(&mut t).await;
             Ok(())
         }
-        Commands::Image { action } => cmd_image(&cli.address, action).await,
-        Commands::Gif { action } => cmd_gif(&cli.address, action).await,
+        Commands::Image { action } => cmd_image(&cli.address, action, json).await,
+        Commands::Gif { action } => cmd_gif(&cli.address, action, json).await,
         Commands::Clock { action } => {
-            let mut t = connect(&cli.address).await?;
-            let result = cmd_clock(&t, action).await;
-            t.disconnect().await?;
+            let mut t = connect(&cli.address, json).await?;
+            let result = cmd_clock(&t, action, json).await;
+            safe_disconnect(&mut t).await;
             result
         }
         Commands::Countdown {
@@ -74,19 +106,17 @@ async fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                 "pause" => 2,
                 "restart" => 3,
                 _ => {
-                    return Err(
-                        "Invalid action. Use: start, pause, restart, disable".into(),
-                    )
+                    return err(json, "Invalid action. Use: start, pause, restart, disable");
                 }
             };
-            let mut t = connect(&cli.address).await?;
+            let mut t = connect(&cli.address, json).await?;
             t.write(
                 &countdown::set_countdown_mode(mode, minutes, seconds),
                 false,
             )
             .await?;
-            println!("Countdown {} ({}m {}s)", action, minutes, seconds);
-            t.disconnect().await?;
+            msg(json, &format!("Countdown {} ({}m {}s)", action, minutes, seconds));
+            safe_disconnect(&mut t).await;
             Ok(())
         }
         Commands::Chronograph { action } => {
@@ -96,77 +126,75 @@ async fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                 "pause" => 2,
                 "continue" => 3,
                 _ => {
-                    return Err(
-                        "Invalid action. Use: reset, start, pause, continue".into(),
-                    )
+                    return err(json, "Invalid action. Use: reset, start, pause, continue");
                 }
             };
-            let mut t = connect(&cli.address).await?;
+            let mut t = connect(&cli.address, json).await?;
             t.write(&chronograph::set_chronograph_mode(mode), false)
                 .await?;
-            println!("Chronograph {}", action);
-            t.disconnect().await?;
+            msg(json, &format!("Chronograph {}", action));
+            safe_disconnect(&mut t).await;
             Ok(())
         }
         Commands::Scoreboard { score1, score2 } => {
-            let mut t = connect(&cli.address).await?;
+            let mut t = connect(&cli.address, json).await?;
             t.write(&scoreboard::set_scoreboard(score1, score2), false)
                 .await?;
-            println!("Scoreboard: {} - {}", score1, score2);
-            t.disconnect().await?;
+            msg(json, &format!("Scoreboard: {} - {}", score1, score2));
+            safe_disconnect(&mut t).await;
             Ok(())
         }
         Commands::Pixel { x, y, hex } => {
             let color = Color::from_hex(&hex);
-            let mut t = connect(&cli.address).await?;
+            let mut t = connect(&cli.address, json).await?;
             t.write(&graffiti::set_pixel(x, y, color), false).await?;
-            println!("Pixel set at ({}, {}) to #{}", x, y, hex);
-            t.disconnect().await?;
+            msg(json, &format!("Pixel set at ({}, {}) to #{}", x, y, hex));
+            safe_disconnect(&mut t).await;
             Ok(())
         }
         Commands::Reset => {
-            let mut t = connect(&cli.address).await?;
+            let mut t = connect(&cli.address, json).await?;
             for packet in common::reset() {
                 t.write(&packet, false).await?;
             }
-            println!("Device reset");
-            t.disconnect().await?;
+            msg(json, "Device reset");
+            safe_disconnect(&mut t).await;
             Ok(())
         }
-        Commands::Carousel { action } => cmd_carousel(&cli.address, action).await,
+        Commands::Carousel { action } => cmd_carousel(&cli.address, action, json).await,
         Commands::Effect { style, colors } => {
             let parsed_colors: Vec<Color> = colors.iter().map(|h| Color::from_hex(h)).collect();
-            let mut t = connect(&cli.address).await?;
+            let mut t = connect(&cli.address, json).await?;
             t.write(&effect::set_effect(style, &parsed_colors), false)
                 .await?;
-            println!("Effect set (style={})", style);
-            t.disconnect().await?;
+            msg(json, &format!("Effect set (style={})", style));
+            safe_disconnect(&mut t).await;
             Ok(())
         }
         Commands::Speed { value } => {
-            let mut t = connect(&cli.address).await?;
+            let mut t = connect(&cli.address, json).await?;
             t.write(&common::set_speed(value), false).await?;
-            println!("Speed set to {}", value);
-            t.disconnect().await?;
+            msg(json, &format!("Speed set to {}", value));
+            safe_disconnect(&mut t).await;
             Ok(())
         }
         Commands::Password { value } => {
-            let mut t = connect(&cli.address).await?;
+            let mut t = connect(&cli.address, json).await?;
             t.write(&common::set_password(value), false).await?;
-            println!("Password set");
-            t.disconnect().await?;
+            msg(json, "Password set");
+            safe_disconnect(&mut t).await;
             Ok(())
         }
         Commands::TimeIndicator { state } => {
             let enabled = match state.as_str() {
                 "on" | "true" | "1" => true,
                 "off" | "false" | "0" => false,
-                _ => return Err("Invalid state. Use: on, off".into()),
+                _ => return err(json, "Invalid state. Use: on, off"),
             };
-            let mut t = connect(&cli.address).await?;
+            let mut t = connect(&cli.address, json).await?;
             t.write(&clock::set_time_indicator(enabled), false).await?;
-            println!("Time indicator {}", if enabled { "on" } else { "off" });
-            t.disconnect().await?;
+            msg(json, &format!("Time indicator {}", if enabled { "on" } else { "off" }));
+            safe_disconnect(&mut t).await;
             Ok(())
         }
         Commands::Text {
@@ -182,7 +210,9 @@ async fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             let text_color = Color::from_hex(&color);
             let text_bg_color = Color::from_hex(&bg_color);
 
-            println!("Rendering text: \"{}\"", message);
+            if !json {
+                println!("Rendering text: \"{}\"", message);
+            }
             let bitmaps = text::render_text(&message, font_size)?;
 
             let opts = text::TextOptions {
@@ -196,32 +226,54 @@ async fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             };
             let packet = text::build_text_packet(&opts);
 
-            let mut t = connect(&cli.address).await?;
+            let mut t = connect(&cli.address, json).await?;
             t.write(&packet, true).await?;
-            println!("Text sent.");
-            t.disconnect().await?;
+            msg(json, "Text sent");
+            safe_disconnect(&mut t).await;
             Ok(())
         }
     }
 }
 
+/// Disconnect from BLE device, ignoring errors.
+/// On macOS, btleplug's CoreBluetooth disconnect often produces a harmless
+/// event channel cleanup error. Since the command already succeeded, we
+/// don't want this to cause a JSON error that confuses the frontend.
+async fn safe_disconnect(transport: &mut BtleplugTransport) {
+    if let Err(e) = transport.disconnect().await {
+        eprintln!("[idm] disconnect warning (harmless): {}", e);
+    }
+}
+
 async fn connect(
     address: &Option<String>,
+    json: bool,
 ) -> Result<BtleplugTransport, Box<dyn std::error::Error>> {
-    let address = address
-        .as_ref()
-        .ok_or("Device address required. Use --address or set IDOTMATRIX_ADDRESS env var.")?;
+    let address = match address.as_ref() {
+        Some(a) => a,
+        None => {
+            let msg = "Device address required. Use --address or set IDOTMATRIX_ADDRESS env var.";
+            eprintln!("[idm] error: {}", msg);
+            return Err(msg.into());
+        }
+    };
+    eprintln!("[idm] connecting to {}...", address);
     let mut transport = BtleplugTransport::new();
     transport.connect(address).await?;
+    eprintln!("[idm] connected to {}", address);
     Ok(transport)
 }
 
-async fn cmd_scan(timeout: u64) -> Result<(), Box<dyn std::error::Error>> {
-    println!("Scanning for iDotMatrix devices ({} ms)...", timeout);
+async fn cmd_scan(timeout: u64, json: bool) -> Result<(), Box<dyn std::error::Error>> {
+    if !json {
+        println!("Scanning for iDotMatrix devices ({} ms)...", timeout);
+    }
     let transport = BtleplugTransport::new();
     let devices = transport.scan(timeout).await?;
 
-    if devices.is_empty() {
+    if json {
+        print_json(&ScanOutput { devices });
+    } else if devices.is_empty() {
         println!("No devices found.");
     } else {
         for d in &devices {
@@ -240,35 +292,41 @@ async fn cmd_scan(timeout: u64) -> Result<(), Box<dyn std::error::Error>> {
 async fn cmd_screen(
     t: &BtleplugTransport,
     action: ScreenAction,
+    json: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     match action {
         ScreenAction::On => {
             t.write(&common::screen_on(), false).await?;
-            println!("Screen on");
+            msg(json, "Screen on");
         }
         ScreenAction::Off => {
             t.write(&common::screen_off(), false).await?;
-            println!("Screen off");
+            msg(json, "Screen off");
         }
         ScreenAction::Flip { state } => {
             let on = match state.to_lowercase().as_str() {
                 "on" => true,
                 "off" => false,
                 _ => {
-                    eprintln!("Invalid flip state '{}': use 'on' or 'off'", state);
+                    let m = format!("Invalid flip state '{}': use 'on' or 'off'", state);
+                    if json {
+                        print_error(&m);
+                    } else {
+                        eprintln!("{}", m);
+                    }
                     std::process::exit(1);
                 }
             };
             t.write(&common::flip_screen(on), false).await?;
-            println!("Screen flip: {}", if on { "on" } else { "off" });
+            msg(json, &format!("Screen flip: {}", if on { "on" } else { "off" }));
         }
         ScreenAction::Brightness { percent } => {
             t.write(&common::set_brightness(percent), false).await?;
-            println!("Brightness set to {}%", percent.clamp(5, 100));
+            msg(json, &format!("Brightness set to {}%", percent.clamp(5, 100)));
         }
         ScreenAction::Freeze => {
             t.write(&common::freeze_screen(), false).await?;
-            println!("Screen freeze toggled");
+            msg(json, "Screen freeze toggled");
         }
     }
     Ok(())
@@ -277,6 +335,7 @@ async fn cmd_screen(
 async fn cmd_clock(
     t: &BtleplugTransport,
     action: ClockAction,
+    json: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     match action {
         ClockAction::Set {
@@ -291,11 +350,11 @@ async fn cmd_clock(
                 false,
             )
             .await?;
-            println!("Clock mode set (style={}, color=#{})", style, color);
+            msg(json, &format!("Clock mode set (style={}, color=#{})", style, color));
         }
         ClockAction::Sync => {
             t.write(&common::set_time_now(), false).await?;
-            println!("Device time synced");
+            msg(json, "Device time synced");
         }
     }
     Ok(())
@@ -304,42 +363,65 @@ async fn cmd_clock(
 async fn cmd_image(
     address: &Option<String>,
     action: ImageAction,
+    json: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     match action {
         ImageAction::Upload { source, size, raw } => {
-            let data = load_source(&source)?;
+            let data = load_source(&source, json)?;
             let gif_data = if raw {
                 data
             } else {
-                println!("Resizing image to {}x{}...", size, size);
+                if json {
+                    print_progress("resizing", Some(&format!("Resizing image to {}x{}...", size, size)), None, None);
+                } else {
+                    println!("Resizing image to {}x{}...", size, size);
+                }
                 imaging::resize::resize_image_to_gif(&data, size as u32)?
             };
 
             let payloads = gif::create_gif_payloads(&gif_data);
-            println!(
-                "Uploading image ({} bytes, {} chunks)...",
-                gif_data.len(),
-                payloads.len()
-            );
+            if !json {
+                println!(
+                    "Uploading image ({} bytes, {} chunks)...",
+                    gif_data.len(),
+                    payloads.len()
+                );
+            }
 
-            let mut t = connect(address).await?;
+            let mut t = connect(address, json).await?;
             for (i, payload) in payloads.iter().enumerate() {
                 info!("Sending chunk {}/{}", i + 1, payloads.len());
+                if json {
+                    print_progress("uploading", None, Some(i + 1), Some(payloads.len()));
+                }
                 t.write(payload, true).await?;
                 sleep(Duration::from_millis(1000)).await;
             }
-            println!("Image uploaded.");
-            t.disconnect().await?;
+            msg(json, "Image uploaded");
+            safe_disconnect(&mut t).await;
         }
         ImageAction::Preview {
             source,
             size,
             output,
         } => {
-            let data = load_source(&source)?;
-            let resized = imaging::resize::resize_image_to_png(&data, size as u32)?;
-            std::fs::write(&output, &resized)?;
-            println!("Preview saved to {}", output);
+            let data = load_source(&source, json)?;
+            if json {
+                // Return base64-encoded GIF for programmatic use
+                let gif_data = imaging::resize::resize_image_to_gif(&data, size as u32)?;
+                let b64 = base64::engine::general_purpose::STANDARD.encode(&gif_data);
+                print_json(&PreviewOutput {
+                    preview: b64,
+                    width: size as u32,
+                    height: size as u32,
+                    bytes: gif_data.len(),
+                    format: "gif".to_string(),
+                });
+            } else {
+                let resized = imaging::resize::resize_image_to_png(&data, size as u32)?;
+                std::fs::write(&output, &resized)?;
+                println!("Preview saved to {}", output);
+            }
         }
     }
     Ok(())
@@ -348,42 +430,63 @@ async fn cmd_image(
 async fn cmd_gif(
     address: &Option<String>,
     action: GifAction,
+    json: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     match action {
         GifAction::Upload { source, size, raw } => {
-            let data = load_source(&source)?;
+            let data = load_source(&source, json)?;
             let gif_data = if raw {
                 data
             } else {
-                println!("Resizing GIF to {}x{}...", size, size);
+                if json {
+                    print_progress("resizing", Some(&format!("Resizing GIF to {}x{}...", size, size)), None, None);
+                } else {
+                    println!("Resizing GIF to {}x{}...", size, size);
+                }
                 imaging::resize::resize_gif(&data, size as u32)?
             };
 
             let payloads = gif::create_gif_payloads(&gif_data);
-            println!(
-                "Uploading GIF ({} bytes, {} chunks)...",
-                gif_data.len(),
-                payloads.len()
-            );
+            if !json {
+                println!(
+                    "Uploading GIF ({} bytes, {} chunks)...",
+                    gif_data.len(),
+                    payloads.len()
+                );
+            }
 
-            let mut t = connect(address).await?;
+            let mut t = connect(address, json).await?;
             for (i, payload) in payloads.iter().enumerate() {
                 info!("Sending chunk {}/{}", i + 1, payloads.len());
+                if json {
+                    print_progress("uploading", None, Some(i + 1), Some(payloads.len()));
+                }
                 t.write(payload, true).await?;
                 sleep(Duration::from_millis(1000)).await;
             }
-            println!("GIF uploaded.");
-            t.disconnect().await?;
+            msg(json, "GIF uploaded");
+            safe_disconnect(&mut t).await;
         }
         GifAction::Preview {
             source,
             size,
             output,
         } => {
-            let data = load_source(&source)?;
-            let resized = imaging::resize::resize_gif(&data, size as u32)?;
-            std::fs::write(&output, &resized)?;
-            println!("Preview saved to {}", output);
+            let data = load_source(&source, json)?;
+            let gif_data = imaging::resize::resize_gif(&data, size as u32)?;
+            if json {
+                let b64 = base64::engine::general_purpose::STANDARD.encode(&gif_data);
+                print_json(&PreviewOutput {
+                    preview: b64,
+                    width: size as u32,
+                    height: size as u32,
+                    bytes: gif_data.len(),
+                    format: "gif".to_string(),
+                });
+            } else {
+                std::fs::write(&output, &gif_data)?;
+                println!("Preview saved to {}", output);
+            }
         }
     }
     Ok(())
@@ -392,6 +495,7 @@ async fn cmd_gif(
 async fn cmd_carousel(
     address: &Option<String>,
     action: CarouselAction,
+    json: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     match action {
         CarouselAction::Upload {
@@ -400,44 +504,57 @@ async fn cmd_carousel(
             delay,
         } => {
             if sources.len() < 2 {
-                return Err("Carousel requires at least 2 images".into());
+                return err(json, "Carousel requires at least 2 images");
             }
 
-            println!("Loading {} images...", sources.len());
+            if !json {
+                println!("Loading {} images...", sources.len());
+            }
             let mut images = Vec::new();
             for source in &sources {
-                images.push(load_source(source)?);
+                images.push(load_source(source, json)?);
             }
 
-            println!(
-                "Creating carousel GIF ({}x{}, {}ms delay)...",
-                size, size, delay
-            );
+            if json {
+                print_progress("resizing", Some(&format!("Creating carousel GIF ({}x{}, {}ms delay)...", size, size, delay)), None, None);
+            } else {
+                println!(
+                    "Creating carousel GIF ({}x{}, {}ms delay)...",
+                    size, size, delay
+                );
+            }
             let gif_data = imaging::resize::create_carousel(&images, size as u32, delay)?;
 
             let payloads = gif::create_gif_payloads(&gif_data);
-            println!(
-                "Uploading carousel ({} bytes, {} chunks)...",
-                gif_data.len(),
-                payloads.len()
-            );
+            if !json {
+                println!(
+                    "Uploading carousel ({} bytes, {} chunks)...",
+                    gif_data.len(),
+                    payloads.len()
+                );
+            }
 
-            let mut t = connect(address).await?;
+            let mut t = connect(address, json).await?;
             for (i, payload) in payloads.iter().enumerate() {
                 info!("Sending chunk {}/{}", i + 1, payloads.len());
+                if json {
+                    print_progress("uploading", None, Some(i + 1), Some(payloads.len()));
+                }
                 t.write(payload, true).await?;
                 sleep(Duration::from_millis(1000)).await;
             }
-            println!("Carousel uploaded.");
-            t.disconnect().await?;
+            msg(json, "Carousel uploaded");
+            safe_disconnect(&mut t).await;
         }
     }
     Ok(())
 }
 
-fn load_source(source: &str) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+fn load_source(source: &str, json: bool) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
     if is_url(source) {
-        println!("Downloading {}...", source);
+        if !json {
+            println!("Downloading {}...", source);
+        }
         fetch_image(source)
     } else {
         Ok(std::fs::read(Path::new(source))?)

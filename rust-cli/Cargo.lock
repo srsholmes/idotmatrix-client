@@ -1174,6 +1174,7 @@ name = "idm"
 version = "0.1.0"
 dependencies = [
  "ab_glyph",
+ "base64",
  "btleplug",
  "chrono",
  "clap",
@@ -1185,6 +1186,8 @@ dependencies = [
  "image",
  "log",
  "reqwest",
+ "serde",
+ "serde_json",
  "tokio",
  "uuid",
 ]

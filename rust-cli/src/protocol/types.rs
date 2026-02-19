@@ -1,4 +1,4 @@
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, serde::Serialize)]
 pub struct Color {
     pub r: u8,
     pub g: u8,
@@ -19,7 +19,7 @@ impl Color {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct DiscoveredDevice {
     pub address: String,
     pub name: String,

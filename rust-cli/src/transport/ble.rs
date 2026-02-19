@@ -52,8 +52,18 @@ impl BtleplugTransport {
             if let Some(props) = p.properties().await? {
                 if let Some(name) = &props.local_name {
                     if name.starts_with(DEVICE_NAME_PREFIX) {
+                        // On macOS, CoreBluetooth doesn't expose real BLE MAC addresses,
+                        // so btleplug reports 00:00:00:00:00:00 for all devices.
+                        // Use the device name as the identifier instead, since the
+                        // connect function already supports name-based matching.
+                        let addr = props.address.to_string();
+                        let identifier = if addr == "00:00:00:00:00:00" {
+                            name.clone()
+                        } else {
+                            addr
+                        };
                         devices.push(DiscoveredDevice {
-                            address: props.address.to_string(),
+                            address: identifier,
                             name: name.clone(),
                             rssi: props.rssi,
                         });
