@@ -367,7 +367,7 @@ async fn cmd_image(
 ) -> Result<(), Box<dyn std::error::Error>> {
     match action {
         ImageAction::Upload { source, size, raw } => {
-            let data = load_source(&source, json)?;
+            let data = load_source(&source, json).await?;
             let gif_data = if raw {
                 data
             } else {
@@ -405,7 +405,7 @@ async fn cmd_image(
             size,
             output,
         } => {
-            let data = load_source(&source, json)?;
+            let data = load_source(&source, json).await?;
             if json {
                 // Return base64-encoded GIF for programmatic use
                 let gif_data = imaging::resize::resize_image_to_gif(&data, size as u32)?;
@@ -434,7 +434,7 @@ async fn cmd_gif(
 ) -> Result<(), Box<dyn std::error::Error>> {
     match action {
         GifAction::Upload { source, size, raw } => {
-            let data = load_source(&source, json)?;
+            let data = load_source(&source, json).await?;
             let gif_data = if raw {
                 data
             } else {
@@ -472,7 +472,7 @@ async fn cmd_gif(
             size,
             output,
         } => {
-            let data = load_source(&source, json)?;
+            let data = load_source(&source, json).await?;
             let gif_data = imaging::resize::resize_gif(&data, size as u32)?;
             if json {
                 let b64 = base64::engine::general_purpose::STANDARD.encode(&gif_data);
@@ -512,7 +512,7 @@ async fn cmd_carousel(
             }
             let mut images = Vec::new();
             for source in &sources {
-                images.push(load_source(source, json)?);
+                images.push(load_source(source, json).await?);
             }
 
             if json {
@@ -550,12 +550,12 @@ async fn cmd_carousel(
     Ok(())
 }
 
-fn load_source(source: &str, json: bool) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+async fn load_source(source: &str, json: bool) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
     if is_url(source) {
         if !json {
             println!("Downloading {}...", source);
         }
-        fetch_image(source)
+        fetch_image(source).await
     } else {
         Ok(std::fs::read(Path::new(source))?)
     }
