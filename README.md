@@ -4,6 +4,8 @@ Control iDotMatrix programmable pixel art LED displays (16x16, 32x32, 64x64) ove
 
 Includes a **Rust CLI** for direct terminal use and a **Tauri desktop app** with a full GUI.
 
+![iDotMatrix Client - Desktop app with 64x64 LED display](./docs/demo.jpg)
+
 ## Rust CLI
 
 A standalone ~3MB binary with no runtime dependencies.
